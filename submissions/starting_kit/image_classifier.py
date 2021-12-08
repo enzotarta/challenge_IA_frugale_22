@@ -7,10 +7,14 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 from tqdm import tqdm
+import torch.nn.functional as F
+import torch.nn.utils.prune as prune
 
 from torchscan import crawl_module
 
 is_cuda = torch.cuda.is_available()
+
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 def _make_variable(X):
     variable = Variable(torch.from_numpy(X))
@@ -23,42 +27,24 @@ def _flatten(x):
     return x.view(x.size(0), -1)
 
 
-class Net(nn.Module):
+class Net(nn.Module):#is LeNet
     def __init__(self):
         super(Net, self).__init__()
-        self.block1 = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(32 * 14 * 14, 512),
-            nn.ReLU(True),
-            nn.Linear(512, 10),
-        )
-        self._initialize_weights()
+        # 1 input image channel, 6 output channels, 3x3 square conv kernel
+        self.conv1 = nn.Conv2d(1, 6, 3)
+        self.conv2 = nn.Conv2d(6, 16, 3)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)  # 5x5 image dimension
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
     def forward(self, x):
-        x = self.block1(x)
-        x = _flatten(x)
-        x = self.fc(x)
+        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
+        x = F.max_pool2d(F.relu(self.conv2(x)), 2)
+        x = x.view(-1, int(x.nelement() / x.shape[0]))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
         return x
-
-    def _initialize_weights(self):
-        # Source: https://github.com/pytorch/vision/blob/master/torchvision/
-        # models/vgg.py
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.Linear):
-                n = m.weight.size(1)
-                m.weight.data.normal_(0, 0.01)
-                m.bias.data.zero_()
 
 
 class ImageClassifier(object):
@@ -67,6 +53,13 @@ class ImageClassifier(object):
         self.net = Net()
         if is_cuda:
             self.net = self.net.cuda()
+        self.parameters_to_prune = (
+                (self.net.conv1, 'weight'),
+                (self.net.conv2, 'weight'),
+                (self.net.fc1, 'weight'),
+                (self.net.fc2, 'weight'),
+                (self.net.fc3, 'weight'),
+            )
 
     def _transform(self, x):
         # adding channel dimension at the first position
@@ -106,12 +99,12 @@ class ImageClassifier(object):
         validation_split = 0.1
         batch_size = 100
         nb_epochs = 0
-        lr = 1e-4
-        optimizer = optim.Adam(self.net.parameters(), lr=lr)
+        lr = 1e-1
+        optimizer = optim.SGD(self.net.parameters(), lr=lr)
         criterion = nn.CrossEntropyLoss().cuda()
         if is_cuda:
             criterion = criterion.cuda()
-
+        prune.global_unstructured(self.parameters_to_prune, pruning_method=prune.L1Unstructured, amount=0.2)
         for epoch in range(nb_epochs):
             t0 = time.time()
             self.net.train()  # train mode
@@ -124,6 +117,9 @@ class ImageClassifier(object):
             for i in pbar:
                 indexes = range(i, min(i + batch_size, n_images))
                 X, y = self._load_minibatch(img_loader, indexes)
+                if is_cuda:
+                    X = X.cuda()
+                    y = y.cuda()
                 # zero-out the gradients because they accumulate by default
                 optimizer.zero_grad()
                 y_pred = self.net(X)
@@ -136,7 +132,6 @@ class ImageClassifier(object):
                 train_loss.append(loss.data.item())
                 nb_trained += X.size(0)
                 pbar.set_description("Epoch [{}/{}], [trained {}/{}], avg_loss: {:.4f}, avg_train_err: {:.4f}".format(epoch + 1, nb_epochs, nb_trained, n_images,np.mean(train_loss), np.mean(train_err)))
-                        
 
             self.net.eval()  # eval mode
             valid_err = []
@@ -147,7 +142,6 @@ class ImageClassifier(object):
                 i += len(indexes)
                 y_pred = self.net(X)
                 valid_err.extend(self._get_err(y_pred, y))
-                print('here')
 
             delta_t = time.time() - t0
             print('Finished epoch {}'.format(epoch + 1))

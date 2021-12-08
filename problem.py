@@ -13,6 +13,7 @@ from torchscan import crawl_module
 from rampwf.score_types import BaseScoreType
 from rampwf.score_types.classifier_base import ClassifierBaseScoreType
 import torch.nn as nn
+import torch
 from sklearn.metrics import accuracy_score
 
 class SimplifiedImageClassifier(object):
@@ -99,6 +100,8 @@ class SimplifiedImageClassifier(object):
         param_size = (model_info['overall']['param_size'] + model_info['overall']['buffer_size']) / 1024 ** 2
         overhead = model_info['overheads']['framework']['fwd'] + model_info['overheads']['cuda']['fwd']
         y_proba[-1,5] = param_size + overhead
+        #theoretical_params
+        y_proba[-1,6] = sum(torch.nn.utils.parameters_to_vector(clf.net.buffers()) != 0)
         return y_proba
 
     def test_submission(self, trained_model, folder_X_array):
@@ -180,10 +183,10 @@ class RAM_metric(BaseScoreType):
         self.is_lower_the_better = True
         self.minimum = 0.0
         self.maximum = np.Inf
-        self.name = 'RAM [MB]'
+        self.name = 'RAM [kB]'
     def __call__(self, y_true_label_index, y_pred_label_index):
         if y_pred_label_index[-1, 0]==42.0:
-            return round(y_pred_label_index[-1, 5] / 1000000, self.precision)
+            return round(y_pred_label_index[-1, 5] / 1000, self.precision)
         else:
             return np.NAN
 
@@ -193,10 +196,23 @@ class Parameters_metric(BaseScoreType):
         self.is_lower_the_better = True
         self.minimum = 0.0
         self.maximum = np.Inf
-        self.name = 'params [M]'
+        self.name = 'params [k]'
     def __call__(self, y_true_label_index, y_pred_label_index):
         if y_pred_label_index[-1, 0]==42.0:
-            return round(y_pred_label_index[-1, 1]/ 1000000, self.precision)
+            return round(y_pred_label_index[-1, 1]/ 1000, self.precision)
+        else:
+            return np.NAN
+
+class theoretical_parameters_metric(BaseScoreType):
+    def __init__(self, precision=3):
+        self.precision = precision
+        self.is_lower_the_better = True
+        self.minimum = 0.0
+        self.maximum = np.Inf
+        self.name = 'theoretical params [k]'
+    def __call__(self, y_true_label_index, y_pred_label_index):
+        if y_pred_label_index[-1, 0]==42.0:
+            return round(y_pred_label_index[-1, 6]/ 1000, self.precision)
         else:
             return np.NAN
 
@@ -360,6 +376,7 @@ workflow = SimplifiedImageClassifier(
 # The first score will be applied on the first Predictions
 score_types = [
     Error(precision=3),
+    theoretical_parameters_metric(),
     Parameters_metric(),
     FLOPs_metric(),
     MACs_metric(),
