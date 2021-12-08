@@ -1,1 +1,1 @@
-# challege_IA_frugale_22
+# challenge_IA_frugale_22
