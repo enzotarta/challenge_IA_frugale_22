@@ -101,7 +101,9 @@ class SimplifiedImageClassifier(object):
         overhead = model_info['overheads']['framework']['fwd'] + model_info['overheads']['cuda']['fwd']
         y_proba[-1,5] = param_size + overhead
         #theoretical_params
-        y_proba[-1,6] = sum(torch.nn.utils.parameters_to_vector(clf.net.buffers()) != 0)
+        y_proba[-1,6] = 0
+        for n, p in clf.net.named_parameters():
+            y_proba[-1,6] += torch.sum(p.data != 0)
         return y_proba
 
     def test_submission(self, trained_model, folder_X_array):

@@ -9,6 +9,7 @@ from torch.autograd import Variable
 from tqdm import tqdm
 import torch.nn.functional as F
 import torch.nn.utils.prune as prune
+from simplify import remove_zeroed
 
 from torchscan import crawl_module
 
@@ -50,9 +51,9 @@ class Net(nn.Module):#is LeNet
 class ImageClassifier(object):
 
     def __init__(self):
-        self.net = Net()
-        if is_cuda:
-            self.net = self.net.cuda()
+        self.net = Net().cuda()
+        #if is_cuda:
+        #    self.net = self.net.cuda()
         self.parameters_to_prune = (
                 (self.net.conv1, 'weight'),
                 (self.net.conv2, 'weight'),
@@ -98,13 +99,13 @@ class ImageClassifier(object):
     def fit(self, img_loader):
         validation_split = 0.1
         batch_size = 100
-        nb_epochs = 0
+        nb_epochs = 1
         lr = 1e-1
+        pruning_amount = 0.1#how much to iteratively prune
         optimizer = optim.SGD(self.net.parameters(), lr=lr)
         criterion = nn.CrossEntropyLoss().cuda()
         if is_cuda:
             criterion = criterion.cuda()
-        prune.global_unstructured(self.parameters_to_prune, pruning_method=prune.L1Unstructured, amount=0.2)
         for epoch in range(nb_epochs):
             t0 = time.time()
             self.net.train()  # train mode
@@ -132,7 +133,10 @@ class ImageClassifier(object):
                 train_loss.append(loss.data.item())
                 nb_trained += X.size(0)
                 pbar.set_description("Epoch [{}/{}], [trained {}/{}], avg_loss: {:.4f}, avg_train_err: {:.4f}".format(epoch + 1, nb_epochs, nb_trained, n_images,np.mean(train_loss), np.mean(train_err)))
-
+            for n, modu in enumerate(self.net.children()):
+                if n != 4:
+                    prune.random_structured(modu, 'weight', amount=pruning_amount, dim=0)
+                    prune.remove(modu, 'weight')
             self.net.eval()  # eval mode
             valid_err = []
             n_images = len(img_loader)
@@ -142,12 +146,12 @@ class ImageClassifier(object):
                 i += len(indexes)
                 y_pred = self.net(X)
                 valid_err.extend(self._get_err(y_pred, y))
-
             delta_t = time.time() - t0
             print('Finished epoch {}'.format(epoch + 1))
             print('Time spent : {:.4f}'.format(delta_t))
             print('Train err : {:.4f}'.format(np.mean(train_err)))
             print('Valid err : {:.4f}'.format(np.mean(valid_err)))
+        remove_zeroed(self.net, torch.zeros((1,1,28,28), device='cuda:0'), [])#performs the REAL simplification, altering the graph
     '''
     def predict(self, img_loader):
         # We need to batch load also at test time
