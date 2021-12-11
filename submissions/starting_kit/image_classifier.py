@@ -15,7 +15,8 @@ from torchscan import crawl_module
 
 is_cuda = torch.cuda.is_available()
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 def _make_variable(X):
     variable = Variable(torch.from_numpy(X))
@@ -28,7 +29,7 @@ def _flatten(x):
     return x.view(x.size(0), -1)
 
 
-class Net(nn.Module):#is LeNet
+class Net(nn.Module):  # is LeNet
     def __init__(self):
         super(Net, self).__init__()
         # 1 input image channel, 6 output channels, 3x3 square conv kernel
@@ -49,30 +50,29 @@ class Net(nn.Module):#is LeNet
 
 
 class ImageClassifier(object):
-
     def __init__(self):
-        self.net = Net().cuda()
-        #if is_cuda:
-        #    self.net = self.net.cuda()
+        self.net = Net()
+        if is_cuda:
+            self.net = self.net.cuda()
         self.parameters_to_prune = (
-                (self.net.conv1, 'weight'),
-                (self.net.conv2, 'weight'),
-                (self.net.fc1, 'weight'),
-                (self.net.fc2, 'weight'),
-                (self.net.fc3, 'weight'),
-            )
+            (self.net.conv1, "weight"),
+            (self.net.conv2, "weight"),
+            (self.net.fc1, "weight"),
+            (self.net.fc2, "weight"),
+            (self.net.fc3, "weight"),
+        )
 
     def _transform(self, x):
         # adding channel dimension at the first position
         x = np.expand_dims(x, axis=0)
         # bringing input between 0 and 1
-        x = x / 255.
+        x = x / 255.0
         return x
 
     def _get_err(self, y_pred, y_true):
         y_pred = y_pred.cpu().data.numpy().argmax(axis=1)
         y_true = y_true.cpu().data.numpy()
-        return (y_pred != y_true)*100.0
+        return (y_pred != y_true) * 100.0
 
     def _load_minibatch(self, img_loader, indexes):
         n_minibatch_images = len(indexes)
@@ -101,16 +101,15 @@ class ImageClassifier(object):
         batch_size = 100
         nb_epochs = 1
         lr = 1e-1
-        pruning_amount = 0.1#how much to iteratively prune
+        pruning_amount = 0.1  # how much to iteratively prune
         optimizer = optim.SGD(self.net.parameters(), lr=lr)
-        criterion = nn.CrossEntropyLoss().cuda()
+        criterion = nn.CrossEntropyLoss()
         if is_cuda:
             criterion = criterion.cuda()
         for epoch in range(nb_epochs):
             t0 = time.time()
             self.net.train()  # train mode
             nb_trained = 0
-            nb_updates = 0
             train_loss = []
             train_err = []
             n_images = int(len(img_loader) * (1 - validation_split))
@@ -132,11 +131,22 @@ class ImageClassifier(object):
                 train_err.extend(self._get_err(y_pred, y))
                 train_loss.append(loss.data.item())
                 nb_trained += X.size(0)
-                pbar.set_description("Epoch [{}/{}], [trained {}/{}], avg_loss: {:.4f}, avg_train_err: {:.4f}".format(epoch + 1, nb_epochs, nb_trained, n_images,np.mean(train_loss), np.mean(train_err)))
+                pbar.set_description(
+                    "Epoch [{}/{}], [trained {}/{}], avg_loss: {:.4f}, avg_train_err: {:.4f}".format(
+                        epoch + 1,
+                        nb_epochs,
+                        nb_trained,
+                        n_images,
+                        np.mean(train_loss),
+                        np.mean(train_err),
+                    )
+                )
             for n, modu in enumerate(self.net.children()):
                 if n != 4:
-                    prune.random_structured(modu, 'weight', amount=pruning_amount, dim=0)
-                    prune.remove(modu, 'weight')
+                    prune.random_structured(
+                        modu, "weight", amount=pruning_amount, dim=0
+                    )
+                    prune.remove(modu, "weight")
             self.net.eval()  # eval mode
             valid_err = []
             n_images = len(img_loader)
@@ -147,12 +157,15 @@ class ImageClassifier(object):
                 y_pred = self.net(X)
                 valid_err.extend(self._get_err(y_pred, y))
             delta_t = time.time() - t0
-            print('Finished epoch {}'.format(epoch + 1))
-            print('Time spent : {:.4f}'.format(delta_t))
-            print('Train err : {:.4f}'.format(np.mean(train_err)))
-            print('Valid err : {:.4f}'.format(np.mean(valid_err)))
-        remove_zeroed(self.net, torch.zeros((1,1,28,28), device='cuda:0'), [])#performs the REAL simplification, altering the graph
-    '''
+            print("Finished epoch {}".format(epoch + 1))
+            print("Time spent : {:.4f}".format(delta_t))
+            print("Train err : {:.4f}".format(np.mean(train_err)))
+            print("Valid err : {:.4f}".format(np.mean(valid_err)))
+        remove_zeroed(
+            self.net, torch.zeros((1, 1, 28, 28), device=device), []
+        )  # performs the REAL simplification, altering the graph
+
+    """
     def predict(self, img_loader):
         # We need to batch load also at test time
         model_info = crawl_module(self.net, (1, 28, 28))
@@ -170,4 +183,4 @@ class ImageClassifier(object):
         y_proba[-1,0] = tot_params#my metrics
         y_proba[-1,1] = tot_flops#my metrics
         return y_proba
-    '''
+    """
