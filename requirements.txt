@@ -8,3 +8,4 @@ pytorch
 ramp-workflow
 torchscan
 tqdm
+torch-simplify
